@@ -1,0 +1,107 @@
+---
+description: 本仓库 Python 代码须遵循 Google Python Style Guide；生成与修改代码时默认应用。
+globs: "**/*.py"
+alwaysApply: true
+---
+
+# Google 风格代码规范（本仓库 Agent 规范）
+
+后续 Agent 在本仓库编写或修改 **Python** 时，须对齐 [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html) 的要点，摘要如下。
+
+## 语言与格式
+
+- **Python 3**：使用当前文件/项目已采用的版本；新代码优先类型注解与 `from __future__ import annotations`（若项目已统一使用）。
+- **缩进**：4 个空格，不使用 Tab。
+- **行宽**：以 **80 列** 为软上限（与 Google 指南一致）；不得超过团队已配置的 formatter（如 88）的上限。
+- **引号**：字符串优先 **单引号** `'`，与文档字符串及已有代码保持一致即可。
+- **文件末尾**：单个换行结尾。
+
+## 命名（Naming）
+
+| 类型 | 约定 | 示例 |
+|------|------|------|
+| 模块 / 包 | `lower_with_under` | `chat_memory` |
+| 类 | `CapWords` | `ChatSession` |
+| 函数 / 方法 | `lower_with_under` | `build_messages_with_history` |
+| 常量 | `CAPS_WITH_UNDER` | `MAX_HISTORY_TURNS` |
+| “私有” | 单下划线前缀 | `_internal_helper` |
+
+避免与 Python 内置名冲突（如 `id`、`list`、`type`）。
+
+## 导入（Imports）
+
+1. **顺序**：标准库 → 第三方 → 本仓库 / 本地；各组之间空一行。
+2. **组内**：按字母序（Google 惯例）。
+3. **禁止** `from module import *`（除 `typing` 等极少例外且须注明原因）。
+4. 优先 **绝对导入**；仅在处理循环依赖等必要时使用相对导入并加简短注释。
+
+示例结构：
+
+```python
+import os
+from typing import Optional
+
+from dotenv import load_dotenv
+from openai import OpenAI
+
+from src.memory.chat_memory import build_messages_with_history
+```
+
+## 类型注解（Typing）
+
+- 公共 API（模块级函数、类公共方法）必须有 **参数与返回值** 注解。
+- 使用 `typing` / `collections.abc` 中的抽象类型（如 `Sequence`、`Mapping`）表达“只读契约”时优先于具体 `list`/`dict`。
+- 可选参数使用 `Optional[T]` 或 `T | None`（与项目现有风格一致）。
+
+## Docstring（Google 风格）
+
+公共模块、类、函数使用 **三引号**，采用 **Google 节标题**：
+
+- 首行：简短摘要（可一行）。
+- 需要时增加：`Args:`、`Returns:`、`Raises:`、`Yields:`、`Attributes:`、`Example:` 等。
+
+```python
+def fetch_messages(user_id: str, limit: int = 10) -> list[str]:
+    """按用户拉取最近消息 ID 列表。
+
+    Args:
+        user_id: 用户唯一标识。
+        limit: 最多返回条数，须为正数。
+
+    Returns:
+        消息 ID 字符串列表，按时间新到旧排序。
+
+    Raises:
+        ValueError: limit 小于等于 0 时抛出。
+    """
+```
+
+单行简单函数可一行 docstring。
+
+## 语句与结构
+
+- **比较**：与 singleton 用 `is` / `is not`；与 `None` 比较写作 `x is None`。
+- **真理值**：在布尔上下文直接用序列/容器，避免 `if len(x) > 0`；需要区分 `None` 时显式写出。
+- **推导式**：保持可读；嵌套过深时改为循环或辅助函数。
+- **异常**：捕获具体异常类型；不要裸露 `except:`；`try` 块尽量只包住可能失败的语句。
+- **Lambda**：仅用于极短内联；复杂逻辑用命名函数。
+
+## 面向对象
+
+- 使用 `@property` 实现简单getter/setter，避免无行为的 getter/setter 方法堆砌。
+- 公共属性若无不变式约束可放宽；需要校验时用 `@property` 或 `dataclass` 与自定义 `__post_init__` 等（与项目一致）。
+
+## 测试与可维护性（若编写测试）
+
+- 测试模块命名：`test_*.py` 或与框架约定一致。
+- 测试名清晰描述行为：`test_<场景>_<期望>`。
+
+## 与本仓库一致
+
+- 新增代码的 **import 顺序、命名、docstring 语言（中文/英文）** 应与同目录最近修改的文件保持一致；若目录内混用，新文件跟随 **同一包内多数文件** 的做法。
+- 不引入仅格式层面的无关大规模重排（避免与“只做任务所需修改”冲突）。
+
+## 参考
+
+- 全文权威来源：<https://google.github.io/styleguide/pyguide.html>
+- 若冲突：以本文件 + 仓库既有约定为准；不确定时优先可读性与类型安全。

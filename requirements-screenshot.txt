@@ -1,0 +1,5 @@
+# 可选：仅运行 scripts/save_page_screenshot.py 时安装
+#   pip install -r requirements-screenshot.txt
+#   playwright install chromium
+
+playwright>=1.40.0
