@@ -57,7 +57,7 @@ if str(SCRIPTS) not in sys.path:
 if str(WEB_DIR) not in sys.path:
     sys.path.insert(0, str(WEB_DIR))
 
-from supreme_shop_common import (  # noqa: E402
+from lib.supreme_shop import (  # noqa: E402
     COLLECTION_DEFAULT_ALL,
     COLLECTION_DEFAULT_TSHIRTS,
 )
@@ -280,7 +280,7 @@ async def meta() -> dict:
     return {
         'tshirts_url': COLLECTION_DEFAULT_TSHIRTS,
         'all_url': COLLECTION_DEFAULT_ALL,
-        'supreme_shop_common': str(SCRIPTS / 'supreme_shop_common.py'),
+        'supreme_shop_common': str(SCRIPTS / 'lib' / 'supreme_shop.py'),
         'minimax_tech_sheets': bool(normalize_api_key(os.environ.get('MINIMAX_API_KEY', ''))),
         'dashscope_tech_sheets': ds,
         'tech_sheet_provider': os.environ.get('TECH_SHEET_PROVIDER', 'auto'),
