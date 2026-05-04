@@ -1,2 +1,17 @@
 # Downloaded Supreme product images (see scripts/supreme_tshirts_download_hd_images.py)
 supreme_tshirts_hd/
+
+# LV product screenshots (scripts/lv_collection_product_screenshots.py)
+lv_product_screens/
+
+# Supreme Web UI 临时下载目录（web/app.py）
+downloads_work/
+
+frontend/node_modules/
+frontend/dist/
+
+# 本地密钥与环境覆盖（勿提交）
+.env
+.env.local
+.env.*.local
+web/.env

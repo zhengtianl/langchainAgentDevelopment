@@ -1,0 +1,29 @@
+/* 轻量布局；页面底色与 antd darkAlgorithm 的 colorBgBase 一致，避免视口边缘露白 */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100vh;
+  background: #141414;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.app-shell {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 24px clamp(16px, 4vw, 48px) 48px;
+}
+
+.status-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 13px;
+}

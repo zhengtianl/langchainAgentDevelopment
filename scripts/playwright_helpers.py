@@ -60,10 +60,12 @@ def new_stealth_context(
     *,
     width: int,
     height: int,
+    device_scale_factor: float = 1.0,
 ):
     """新建带 UA、语言的上下文并注入轻量 patch。"""
     context = browser.new_context(
         viewport={'width': width, 'height': height},
+        device_scale_factor=device_scale_factor,
         user_agent=CHROME_UA,
         locale='en-US',
         timezone_id='America/New_York',

@@ -14,16 +14,21 @@
 from __future__ import annotations
 
 import argparse
-import re
 from pathlib import Path
-from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 
 from playwright_helpers import CHROME_UA, launch_chromium, new_stealth_context
-
-COLLECTION_DEFAULT = 'https://shop.supreme.com/collections/t-shirts'
+from supreme_shop_common import (
+    COLLECTION_DEFAULT_TSHIRTS,
+    collect_product_urls,
+    dismiss_cookie_banner,
+    safe_filename,
+    scroll_collection_page,
+    slug_from_product_url,
+)
 
 # 在商品页执行，收集 Shopify CDN 产品图（去重、尽量含多图/最大 srcset）。
 _EXTRACT_IMAGE_URLS_JS = r"""
@@ -87,7 +92,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         '--url',
-        default=COLLECTION_DEFAULT,
+        default=COLLECTION_DEFAULT_TSHIRTS,
         help='集合页 URL（默认：t-shirts）',
     )
     p.add_argument(
@@ -153,59 +158,6 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _slug_from_product_url(href: str) -> str:
-    path = urlparse(href).path.rstrip('/')
-    return path.split('/')[-1] or 'product'
-
-
-def _dismiss_cookie_banner(page) -> None:
-    for sel in (
-        'button:has-text("Accept")',
-        'button:has-text("I Accept")',
-        'button:has-text("Agree")',
-    ):
-        try:
-            loc = page.locator(sel).first
-            if loc.is_visible(timeout=1200):
-                loc.click()
-                page.wait_for_timeout(400)
-                return
-        except PlaywrightError:
-            continue
-
-
-def _scroll_collection(page, rounds: int, height: int) -> None:
-    for _ in range(max(0, rounds)):
-        page.mouse.wheel(0, height // 2)
-        page.wait_for_timeout(350)
-
-
-def _collect_product_urls(page, max_count: int | None) -> list[str]:
-    """从集合页收集商品详情绝对 URL，顺序稳定、去重。"""
-    loc = page.locator('a[href*="/products/"]')
-    try:
-        loc.first.wait_for(state='attached', timeout=45_000)
-    except PlaywrightError:
-        return []
-
-    seen: set[str] = set()
-    out: list[str] = []
-    n = loc.count()
-    for i in range(n):
-        if max_count is not None and len(out) >= max_count:
-            break
-        raw = loc.nth(i).get_attribute('href')
-        if not raw or '/products/' not in raw:
-            continue
-        full = urljoin(page.url, raw)
-        norm = full.split('?')[0].split('#')[0].rstrip('/')
-        if norm in seen:
-            continue
-        seen.add(norm)
-        out.append(norm)
-    return out
-
-
 def _shopify_hd_url(src: str, max_width: int) -> str:
     """为 Shopify CDN 图片 URL 设置 width 参数以请求大图。"""
     if not src.startswith('http'):
@@ -215,11 +167,6 @@ def _shopify_hd_url(src: str, max_width: int) -> str:
     qs['width'] = [str(max_width)]
     new_q = urlencode(qs, doseq=True)
     return urlunparse((p.scheme, p.netloc, p.path, p.params, new_q, p.fragment))
-
-
-def _safe_filename(s: str) -> str:
-    s = re.sub(r'[^a-zA-Z0-9._-]+', '_', s)
-    return (s[:120] or 'img').strip('_')
 
 
 def _download_image(
@@ -266,11 +213,11 @@ def run(args: argparse.Namespace) -> None:
         request = context.request
 
         page.goto(args.url, wait_until='domcontentloaded', timeout=90_000)
-        _dismiss_cookie_banner(page)
+        dismiss_cookie_banner(page)
         page.wait_for_timeout(1200)
-        _scroll_collection(page, args.scroll_rounds, args.height)
+        scroll_collection_page(page, args.scroll_rounds, args.height)
 
-        product_urls = _collect_product_urls(page, max_products)
+        product_urls = collect_product_urls(page, max_products)
 
         if not product_urls:
             print('未找到商品链接。请检查集合 URL 或增大 --scroll-rounds。')
@@ -285,7 +232,7 @@ def run(args: argparse.Namespace) -> None:
 
         ok = 0
         for idx, product_url in enumerate(product_urls, start=1):
-            handle = _slug_from_product_url(product_url)
+            handle = slug_from_product_url(product_url)
             page.goto(product_url, wait_until='domcontentloaded', timeout=90_000)
             page.wait_for_timeout(args.product_wait_ms)
             srcs: list[str] = page.evaluate(_EXTRACT_IMAGE_URLS_JS)
@@ -304,7 +251,7 @@ def run(args: argparse.Namespace) -> None:
                 elif '.webp' in pl:
                     ext = '.webp'
 
-                fname = f'{idx:03d}_{_safe_filename(handle)}_{j}{ext}'
+                fname = f'{idx:03d}_{safe_filename(handle)}_{j}{ext}'
                 target = out_dir / fname
                 if _download_image(request, hd, target, referer=product_url):
                     ok += 1
