@@ -16,10 +16,9 @@ from pathlib import Path
 
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page
-from playwright.sync_api import sync_playwright
 
-from playwright_helpers import launch_chromium, new_stealth_context
-from supreme_shop_common import (
+from lib.session import open_stealth_session
+from lib.supreme_shop import (
     COLLECTION_DEFAULT_TSHIRTS,
     collect_product_urls,
     dismiss_cookie_banner,
@@ -156,7 +155,6 @@ def _screenshot_detail(
 ) -> None:
     """单张截图：默认最大商品图元素；视口模式则整帧或（可选）整页长图。"""
     if viewport_only:
-        # 仅视口单帧，或显式要求时再整页长图
         page.screenshot(path=str(target), full_page=full_page)
         return
 
@@ -170,7 +168,6 @@ def _screenshot_detail(
         except PlaywrightError:
             pass
 
-    # 找不到可用商品图时：只截视口一帧，绝不默认长滚动整页
     page.screenshot(path=str(target), full_page=False)
 
 
@@ -180,21 +177,16 @@ def run(args: argparse.Namespace) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     max_products = None if args.max == 0 else args.max
-
-    # 截主图时使用较高 device_scale_factor，PNG 更清晰（与 HD「看清细节」一致）
     dsf = 1.0 if args.viewport_only else 2.0
 
-    with sync_playwright() as p:
-        browser = launch_chromium(
-            p, headed=args.headed, browser_channel=args.browser_channel
-        )
-        context = new_stealth_context(
-            browser,
-            width=args.width,
-            height=args.height,
-            device_scale_factor=dsf,
-        )
-        page = context.new_page()
+    with open_stealth_session(
+        headed=args.headed,
+        browser_channel=args.browser_channel,
+        width=args.width,
+        height=args.height,
+        device_scale_factor=dsf,
+    ) as s:
+        page = s.page
 
         page.goto(args.url, wait_until='domcontentloaded', timeout=90_000)
         dismiss_cookie_banner(page)
@@ -205,8 +197,6 @@ def run(args: argparse.Namespace) -> None:
         if not hrefs:
             shot = out_dir / '_collection_empty.png'
             page.screenshot(path=str(shot), full_page=False)
-            context.close()
-            browser.close()
             print(
                 '未找到 a[href*="/products/"] 链接。可能选择器与主题不符，'
                 f'已保存列表页截图: {shot.resolve()}'
@@ -237,9 +227,6 @@ def run(args: argparse.Namespace) -> None:
             )
             print(f'  [{idx}/{len(hrefs)}] {target.name}')
             page.wait_for_timeout(args.between_ms)
-
-        context.close()
-        browser.close()
 
     print(f'完成。输出目录: {out_dir.resolve()}')
 

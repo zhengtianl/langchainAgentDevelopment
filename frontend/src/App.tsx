@@ -157,7 +157,7 @@ export default function App() {
       <Space direction="vertical" size="large" style={{ width: '100%' }}>
         <div>
           <Typography.Title level={2} style={{ marginBottom: 0 }}>
-            Supreme 商品高清图
+            Supreme 商品高清打板图
           </Typography.Title>
         </div>
 

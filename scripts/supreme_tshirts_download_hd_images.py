@@ -2,7 +2,9 @@
 
 官方 Storefront JSON（如 ``/products/handle.js``）在部分环境下会返回 403，因此本脚本
 在打开**商品详情页**后，从 ``og:image``、JSON-LD、``img``/``srcset`` 中收集
-``cdn.shopify.com`` 地址，再为 URL 增加 ``width=`` 参数请求尽量大的图（默认 4096）。
+``cdn.shopify.com`` 地址。默认**每件商品只下载一张**：在候选里选**源图宽度最大**的一张
+（从 ``width=`` 或路径里 ``NxM`` 推断；相同则取页面顺序中的第一张），再为 URL 增加
+``width=`` 参数请求尽量大的图（默认 4096）。需要全量图时使用 ``--all-images``。
 
 请合理设置 ``--max-products`` 与间隔，并遵守 [Supreme 店铺](https://shop.supreme.com/collections/t-shirts) 使用条款与版权。
 
@@ -14,14 +16,15 @@
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from playwright.sync_api import Error as PlaywrightError
-from playwright.sync_api import sync_playwright
 
-from playwright_helpers import CHROME_UA, launch_chromium, new_stealth_context
-from supreme_shop_common import (
+from lib.playwright import CHROME_UA
+from lib.session import open_stealth_session
+from lib.supreme_shop import (
     COLLECTION_DEFAULT_TSHIRTS,
     collect_product_urls,
     dismiss_cookie_banner,
@@ -155,13 +158,52 @@ def parse_args() -> argparse.Namespace:
         default='auto',
         help='同其他脚本',
     )
+    p.add_argument(
+        '--all-images',
+        action='store_true',
+        help='下载该商品页解析到的全部 Shopify 图；默认每件只下 1 张（源宽度最大）',
+    )
     return p.parse_args()
+
+
+def _normalize_http_url(src: str) -> str:
+    if src.startswith('http'):
+        return src
+    return 'https:' + src if src.startswith('//') else src
+
+
+def _inferred_source_width(url: str) -> int:
+    """从 query ``width=`` 或路径中 ``宽x高`` 片段推断可比较的源宽度（用于选最大图）。"""
+    u = _normalize_http_url(url)
+    p = urlparse(u)
+    qs = parse_qs(p.query)
+    for key in ('width', 'w'):
+        raw = (qs.get(key) or [None])[0]
+        if raw and str(raw).isdigit():
+            return int(raw)
+    m = re.search(r'(\d{2,5})[xX](\d{2,5})', p.path)
+    if m:
+        return max(int(m.group(1)), int(m.group(2)))
+    return 0
+
+
+def _pick_largest_image_url(candidates: list[str]) -> str | None:
+    """在候选列表中选源宽度最大者；宽度相同或均未知时取列表顺序中的第一张。"""
+    if not candidates:
+        return None
+    best_i = 0
+    best_w = _inferred_source_width(candidates[0])
+    for i, u in enumerate(candidates[1:], start=1):
+        w = _inferred_source_width(u)
+        if w > best_w:
+            best_w = w
+            best_i = i
+    return candidates[best_i]
 
 
 def _shopify_hd_url(src: str, max_width: int) -> str:
     """为 Shopify CDN 图片 URL 设置 width 参数以请求大图。"""
-    if not src.startswith('http'):
-        src = 'https:' + src if src.startswith('//') else src
+    src = _normalize_http_url(src)
     p = urlparse(src)
     qs = parse_qs(p.query)
     qs['width'] = [str(max_width)]
@@ -202,15 +244,14 @@ def run(args: argparse.Namespace) -> None:
 
     max_products = None if args.max_products == 0 else args.max_products
 
-    with sync_playwright() as p:
-        browser = launch_chromium(
-            p, headed=args.headed, browser_channel=args.browser_channel
-        )
-        context = new_stealth_context(
-            browser, width=args.width, height=args.height
-        )
-        page = context.new_page()
-        request = context.request
+    with open_stealth_session(
+        headed=args.headed,
+        browser_channel=args.browser_channel,
+        width=args.width,
+        height=args.height,
+    ) as s:
+        page = s.page
+        request = s.request
 
         page.goto(args.url, wait_until='domcontentloaded', timeout=90_000)
         dismiss_cookie_banner(page)
@@ -221,13 +262,11 @@ def run(args: argparse.Namespace) -> None:
 
         if not product_urls:
             print('未找到商品链接。请检查集合 URL 或增大 --scroll-rounds。')
-            context.close()
-            browser.close()
             return
 
+        mode = '全部 Shopify 图' if args.all_images else '每商品 1 张（最大源宽优先）'
         print(
-            f'共 {len(product_urls)} 件商品，按详情页提取图片并下载 '
-            f'（CDN width={args.image_width}）…'
+            f'共 {len(product_urls)} 件商品，{mode}，下载请求 width={args.image_width} …'
         )
 
         ok = 0
@@ -242,7 +281,15 @@ def run(args: argparse.Namespace) -> None:
                 print(f'  [{idx}/{len(product_urls)}] {handle}: 页面未解析到 cdn.shopify 图片')
                 continue
 
-            for j, src in enumerate(srcs, start=1):
+            if args.all_images:
+                to_fetch = list(enumerate(srcs, start=1))
+            else:
+                pick = _pick_largest_image_url(srcs)
+                if not pick:
+                    continue
+                to_fetch = [(1, pick)]
+
+            for j, src in to_fetch:
                 hd = _shopify_hd_url(src, args.image_width)
                 ext = '.jpg'
                 pl = urlparse(hd).path.lower()
@@ -263,9 +310,6 @@ def run(args: argparse.Namespace) -> None:
                     print(f'  OK (原尺寸) {target.name}')
                 else:
                     print(f'  FAIL {handle} 图 {j}')
-
-        context.close()
-        browser.close()
 
     print(f'完成。成功下载约 {ok} 个文件，目录: {out_dir.resolve()}')
 

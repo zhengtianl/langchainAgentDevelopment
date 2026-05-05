@@ -16,9 +16,9 @@ from urllib.parse import urljoin, urlparse
 
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page
-from playwright.sync_api import sync_playwright
 
-from playwright_helpers import launch_chromium, new_stealth_context
+from lib.filename import safe_filename, slug_from_url
+from lib.session import open_stealth_session
 
 DEFAULT_LIST_URL = (
     'https://hk.louisvuitton.com/eng-hk/men/ready-to-wear/'
@@ -71,16 +71,6 @@ def parse_args() -> argparse.Namespace:
         default='auto',
     )
     return p.parse_args()
-
-
-def _safe_filename(s: str) -> str:
-    s = re.sub(r'[^a-zA-Z0-9._-]+', '_', s)[:120]
-    return s.strip('_') or 'item'
-
-
-def _slug_from_url(href: str) -> str:
-    p = urlparse(href).path.rstrip('/')
-    return p.split('/')[-1] or 'product'
 
 
 def _dismiss_cookies(page: Page) -> None:
@@ -331,15 +321,14 @@ def run(args: argparse.Namespace) -> None:
     max_n = None if args.max == 0 else args.max
     dsf = 1.0 if args.viewport_only else 2.0
 
-    with sync_playwright() as p:
-        b = launch_chromium(p, headed=args.headed, browser_channel=args.browser_channel)
-        ctx = new_stealth_context(
-            b,
-            width=args.width,
-            height=args.height,
-            device_scale_factor=dsf,
-        )
-        page = ctx.new_page()
+    with open_stealth_session(
+        headed=args.headed,
+        browser_channel=args.browser_channel,
+        width=args.width,
+        height=args.height,
+        device_scale_factor=dsf,
+    ) as s:
+        page = s.page
 
         page.goto(args.url, wait_until='domcontentloaded', timeout=120_000)
         try:
@@ -358,8 +347,6 @@ def run(args: argparse.Namespace) -> None:
         if not hrefs:
             shot = out_dir / '_lv_list_empty.png'
             page.screenshot(path=str(shot), full_page=False)
-            ctx.close()
-            b.close()
             print(
                 '未在页面中解析到 Louis Vuitton 商品详情 URL（路径形如 '
                 '…/eng-hk/products/…/SKU）。'
@@ -375,8 +362,8 @@ def run(args: argparse.Namespace) -> None:
         print(f'共 {len(hrefs)} 个商品链接，开始截图…')
 
         for i, href in enumerate(hrefs, start=1):
-            slug = _slug_from_url(href)
-            fname = out_dir / f'{i:03d}_{_safe_filename(slug)}_1.png'
+            slug = slug_from_url(href)
+            fname = out_dir / f'{i:03d}_{safe_filename(slug)}_1.png'
             page.goto(href, wait_until='domcontentloaded', timeout=120_000)
             page.wait_for_timeout(800)
             _dismiss_cookies(page)
@@ -389,9 +376,6 @@ def run(args: argparse.Namespace) -> None:
             )
             print(f'  [{i}/{len(hrefs)}] {fname.name}')
             page.wait_for_timeout(args.between_ms)
-
-        ctx.close()
-        b.close()
 
     print(f'完成。输出目录: {out_dir.resolve()}')
 

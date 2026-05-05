@@ -16,17 +16,10 @@ import os
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-try:
-    from dotenv import load_dotenv
+from lib.env import ensure_web_on_path, load_dotenv_from_repo
 
-    load_dotenv(ROOT / '.env')
-    load_dotenv(ROOT / 'web' / '.env', override=True)
-except ImportError:
-    pass
-WEB = ROOT / 'web'
-if str(WEB) not in sys.path:
-    sys.path.insert(0, str(WEB))
+load_dotenv_from_repo()
+ensure_web_on_path()
 
 from minimax_tech_sheet import (  # noqa: E402
     DEFAULT_TECH_SHEET_PROMPT,
