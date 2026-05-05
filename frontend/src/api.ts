@@ -27,17 +27,28 @@ export async function fetchMeta(): Promise<MetaResponse> {
 export interface StartJobResponse {
   job_id: string;
   collection_url: string;
+  /** 后端解析后的打版图开关，应与请求一致 */
+  generate_tech_sheets?: boolean;
+  /** downloads_work 下的一级目录名（时间戳） */
+  work_folder?: string;
 }
 
 export async function startJob(body: {
   mode: 'tshirts_hd' | 'all_hd';
   max_products: number;
   browser_channel: string;
+  /** 为 false 时不生成打板图，后端不调用通义/MiniMax */
+  generate_tech_sheets?: boolean;
 }): Promise<StartJobResponse> {
+  const payload = {
+    ...body,
+    // 与 snake_case 一并发送，避免代理/中间层只认 camelCase 时丢失字段
+    generateTechSheets: body.generate_tech_sheets,
+  };
   const r = await fetch(apiUrl('/api/jobs'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(payload),
   });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
@@ -47,6 +58,10 @@ export interface JobStatus {
   status: 'running' | 'done' | 'error';
   mode?: string;
   collection_url?: string;
+  /** 该任务是否请求生成打板图 */
+  generate_tech_sheets?: boolean;
+  /** 产物目录：downloads_work/<work_folder>/ */
+  work_folder?: string;
   log?: string;
   error?: string | null;
   zip_name?: string | null;

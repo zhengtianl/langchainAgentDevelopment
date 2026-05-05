@@ -8,6 +8,7 @@ import {
   Select,
   Space,
   Spin,
+  Switch,
   Typography,
   theme,
 } from 'antd';
@@ -34,6 +35,8 @@ export default function App() {
   const [metaErr, setMetaErr] = useState<string | null>(null);
   const [maxProducts, setMaxProducts] = useState(30);
   const [browserChannel, setBrowserChannel] = useState('auto');
+  /** 关闭后不生成 tech_sheets，不调用通义万相 / MiniMax */
+  const [generateTechSheets, setGenerateTechSheets] = useState(true);
   const [busy, setBusy] = useState(false);
   const [panelTone, setPanelTone] = useState<PanelTone>('default');
   const [statusText, setStatusText] = useState('就绪。点击下方按钮开始。');
@@ -86,12 +89,24 @@ export default function App() {
       stopPoll();
 
       try {
-        const { job_id, collection_url } = await startJob({
+        const started = await startJob({
           mode,
           max_products: n,
           browser_channel: browserChannel,
+          generate_tech_sheets: generateTechSheets,
         });
-        setStatusText(`job: ${job_id}\n集合: ${collection_url}\n轮询状态中…`);
+        const { job_id, collection_url } = started;
+        if (started.generate_tech_sheets !== undefined) {
+          const mismatch = started.generate_tech_sheets !== generateTechSheets;
+          if (mismatch) {
+            message.warning(
+              `后端记录的打版图开关为 ${String(started.generate_tech_sheets)}，与当前开关不一致，请确认已重启 web/app.py 并硬刷新前端。`
+            );
+          }
+        }
+        setStatusText(
+          `job: ${job_id}\n工作目录: ${started.work_folder ?? '(未知)'}\n集合: ${collection_url}\n打版图: ${String(started.generate_tech_sheets ?? generateTechSheets)}\n轮询状态中…`
+        );
 
         const pollOnce = async (): Promise<boolean> => {
           const j: JobStatus = await fetchJob(job_id);
@@ -102,7 +117,19 @@ export default function App() {
           setBusy(false);
           if (j.status === 'done') {
             setPanelTone('done');
-            setStatusText((j.log || '').slice(-4000) || '完成');
+            setStatusText(
+              [
+                '任务已完成。',
+                `工作目录: ${j.work_folder ?? '—'}`,
+                `模式: ${j.mode ?? '—'}`,
+                j.generate_tech_sheets !== undefined
+                  ? `打版图: ${j.generate_tech_sheets ? '已尝试生成' : '未生成（仅商品图）'}`
+                  : null,
+                '请点击下方「下载 ZIP」获取压缩包。',
+              ]
+                .filter(Boolean)
+                .join('\n')
+            );
             setDownloadJobId(job_id);
           } else {
             setPanelTone('error');
@@ -126,7 +153,7 @@ export default function App() {
         setStatusText(String(e));
       }
     },
-    [busy, browserChannel, maxProducts, message, stopPoll]
+    [busy, browserChannel, generateTechSheets, maxProducts, message, stopPoll]
   );
 
   useEffect(() => () => stopPoll(), [stopPoll]);
@@ -187,6 +214,21 @@ export default function App() {
                 ]}
                 style={{ width: '100%', maxWidth: 280, marginTop: 8, display: 'block' }}
               />
+            </div>
+
+            <div>
+              <Space align="center" wrap>
+                <Switch
+                  checked={generateTechSheets}
+                  disabled={busy}
+                  onChange={setGenerateTechSheets}
+                  checkedChildren="生成打板图"
+                  unCheckedChildren="仅高清图"
+                />
+                <Typography.Text type="secondary">
+                  关闭后不生成打板文件，不调用通义万相与 MiniMax
+                </Typography.Text>
+              </Space>
             </div>
 
             <Space wrap>

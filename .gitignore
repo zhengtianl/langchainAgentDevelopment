@@ -10,6 +10,11 @@ downloads_work/
 frontend/node_modules/
 frontend/dist/
 
+# Python 字节码（勿提交）
+__pycache__/
+*.py[cod]
+*$py.class
+
 # 本地密钥与环境覆盖（勿提交）
 .env
 .env.local
