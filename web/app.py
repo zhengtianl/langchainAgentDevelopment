@@ -35,12 +35,14 @@ import subprocess
 import sys
 import threading
 import uuid
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 
 ROOT = Path(__file__).resolve().parent.parent
 WEB_DIR = Path(__file__).resolve().parent
@@ -70,6 +72,18 @@ WORK_ROOT.mkdir(parents=True, exist_ok=True)
 
 JOBS: dict[str, dict] = {}
 
+
+def _new_work_folder_name() -> str:
+    """``downloads_work`` 下的一级目录名：本地时间戳 + 微秒，避免同秒多任务冲突。"""
+    base = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+    name = base
+    n = 0
+    while (WORK_ROOT / name).exists():
+        n += 1
+        name = f'{base}_{n}'
+    return name
+
+
 app = FastAPI(title='Supreme 下载 API', version='1.0.0')
 
 app.add_middleware(
@@ -95,6 +109,33 @@ class StartJobBody(BaseModel):
         'auto',
         description='playwright：auto | chrome | msedge | chromium',
     )
+    generate_tech_sheets: bool = Field(
+        True,
+        description='为 False 时不生成 tech_sheets/，不调用通义万相与 MiniMax',
+        validation_alias=AliasChoices(
+            'generate_tech_sheets',
+            'generateTechSheets',
+        ),
+    )
+
+    @field_validator('generate_tech_sheets', mode='before')
+    @classmethod
+    def _normalize_generate_tech_sheets(cls, v: Any) -> bool:
+        """兼容缺失字段、字符串与数字，避免误用默认值 True 导致仍调图生图 API。"""
+        if v is None:
+            return True
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return int(v) != 0
+        if isinstance(v, str):
+            s = v.strip().lower()
+            if s in ('0', 'false', 'no', 'off', ''):
+                return False
+            if s in ('1', 'true', 'yes', 'on'):
+                return True
+            return bool(s)
+        return bool(v)
 
 
 def run_tech_sheets_dispatch(out_dir: Path, log_lines: list[str]) -> None:
@@ -132,7 +173,14 @@ def _run_hd_download(
     browser_channel: str,
 ) -> None:
     job = JOBS[job_id]
-    out_dir = WORK_ROOT / job_id / out_subdir
+    work_folder = str(job.get('work_folder') or '')
+    if not work_folder:
+        job['status'] = 'error'
+        job['error'] = '内部错误：缺少 work_folder'
+        job['log'] = ''
+        return
+    parent = WORK_ROOT / work_folder
+    out_dir = parent / out_subdir
     out_dir.mkdir(parents=True, exist_ok=True)
     script = SCRIPTS / 'supreme_tshirts_download_hd_images.py'
     cmd = [
@@ -153,6 +201,10 @@ def _run_hd_download(
         cmd.extend(['--max-products', '0'])
 
     log_lines: list[str] = []
+    # 中文 Windows 下子进程 stdout 常为 GBK，与 encoding='utf-8' 解码不一致会乱码；强制子进程 UTF-8 输出
+    child_env = os.environ.copy()
+    child_env['PYTHONIOENCODING'] = 'utf-8'
+    child_env['PYTHONUTF8'] = '1'
     try:
         proc = subprocess.run(
             cmd,
@@ -162,6 +214,7 @@ def _run_hd_download(
             timeout=None,
             encoding='utf-8',
             errors='replace',
+            env=child_env,
         )
         log_lines.append(f'exit_code={proc.returncode}')
         if proc.stdout:
@@ -177,24 +230,34 @@ def _run_hd_download(
             return
 
         try:
-            run_tech_sheets_dispatch(out_dir, log_lines)
+            # 仅以 JOBS 为准，避免线程参数与任务记录不一致
+            want_tech = bool(JOBS[job_id].get('generate_tech_sheets', True))
+            log_lines.append(
+                f'--- 打版图开关(任务记录): generate_tech_sheets={want_tech} ---'
+            )
+            if want_tech:
+                run_tech_sheets_dispatch(out_dir, log_lines)
+            else:
+                log_lines.append(
+                    '--- 打版图: 已选择不生成打板文件，未调用通义万相 / MiniMax ---'
+                )
         except Exception as e:
             log_lines.append(f'--- 打版图: 未预期错误 ---\n{e!s}')
 
         log_text = '\n'.join(log_lines)
 
-        parent = WORK_ROOT / job_id
         arc_base = str(parent / f'_export_{out_subdir}')
         shutil.make_archive(arc_base, 'zip', root_dir=str(parent), base_dir=out_subdir)
         zip_tmp = Path(arc_base + '.zip')
-        zip_final = parent / f'{out_subdir}.zip'
-        if zip_final.exists():
-            zip_final.unlink()
-        zip_tmp.rename(zip_final)
+        zip_on_disk = parent / f'{out_subdir}.zip'
+        if zip_on_disk.exists():
+            zip_on_disk.unlink()
+        zip_tmp.rename(zip_on_disk)
         job['status'] = 'done'
         job['log'] = log_text
-        job['zip_name'] = zip_final.name
-        job['zip_path'] = str(zip_final)
+        # 下载文件名带时间戳目录名，便于与磁盘一级目录对应
+        job['zip_name'] = f'{work_folder}_{out_subdir}.zip'
+        job['zip_path'] = str(zip_on_disk)
     except Exception as e:
         job['status'] = 'error'
         job['error'] = str(e)
@@ -224,10 +287,13 @@ async def create_job(body: StartJobBody) -> dict:
         subdir = 'supreme_all_hd'
 
     job_id = uuid.uuid4().hex
+    work_folder = _new_work_folder_name()
     JOBS[job_id] = {
         'status': 'running',
         'mode': body.mode,
         'collection_url': url,
+        'generate_tech_sheets': body.generate_tech_sheets,
+        'work_folder': work_folder,
         'log': '',
         'zip_path': None,
         'zip_name': None,
@@ -240,7 +306,12 @@ async def create_job(body: StartJobBody) -> dict:
         daemon=True,
     )
     t.start()
-    return {'job_id': job_id, 'collection_url': url}
+    return {
+        'job_id': job_id,
+        'collection_url': url,
+        'generate_tech_sheets': body.generate_tech_sheets,
+        'work_folder': work_folder,
+    }
 
 
 @app.get('/api/jobs/{job_id}')
